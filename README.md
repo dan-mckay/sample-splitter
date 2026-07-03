@@ -6,6 +6,32 @@ A Python CLI that takes audio sample files that are strung together, splits them
 
 The source material is a library of audio files ripped from 1990s sample CDs. Each file bundles multiple unrelated one-shot sounds (drum hits, instrument notes, stabs) separated by gaps. The goal is to split every file into individual samples and give each one a short, descriptive, human-readable name based on what it sounds like.
 
+## Prerequisites
+
+- **macOS on Apple Silicon** (the only tested platform; nothing is intentionally macOS-specific)
+- **[uv](https://docs.astral.sh/uv/)** — manages the Python install (3.12), virtualenv, and dependencies; no system Python or manual venv needed (`brew install uv`)
+- **Disk space**: ~2GB for the classification model and Python dependencies (PyTorch, transformers, soundfile, numpy, typer — all installed automatically by uv)
+- **A sample library**: a folder of WAV/FLAC files to process. Source files are never modified, but keep a backup of one-of-a-kind material anyway
+
+No API keys or accounts are required — classification runs entirely locally.
+
+## The classification model
+
+The `name` command classifies samples with [CLAP](https://huggingface.co/laion/clap-htsat-unfused) (`laion/clap-htsat-unfused`), a zero-shot audio classification model from LAION, downloaded from Hugging Face.
+
+- **Download is automatic**: the first `name` run fetches the model (~600MB) and caches it; later runs load from the cache. No Hugging Face account is needed.
+- **To pre-download manually** (e.g. before going offline):
+
+  ```sh
+  uv run hf download laion/clap-htsat-unfused
+  ```
+
+- **Cache location**: `~/.cache/huggingface/` by default. To keep it off the internal disk (e.g. on an SD card), set `HF_HOME`:
+
+  ```sh
+  export HF_HOME=/Volumes/sdcard/huggingface
+  ```
+
 ## Prompt
 
 The project brief below is the starting prompt for the planning and build work.
