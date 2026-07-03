@@ -1,0 +1,23 @@
+[project]
+name = "sample-splitter"
+version = "0.1.0"
+description = "Splits 90s sample-CD rips into individual samples and files them into a categorised, sampler-ready library"
+requires-python = "==3.12.*"
+dependencies = [
+    "typer>=0.12",
+]
+
+[project.scripts]
+sample-splitter = "sample_splitter.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sample_splitter"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
