@@ -15,6 +15,39 @@ The source material is a library of audio files ripped from 1990s sample CDs. Ea
 
 No API keys or accounts are required — classification runs entirely locally.
 
+## Running it
+
+This is a command-line tool: you type commands into a terminal rather than opening an app. If Python is unfamiliar territory, the good news is you don't need to install Python yourself, create a "virtual environment", or run `pip install` — `uv` (see Prerequisites above) handles all of that automatically, every time.
+
+1. Get the code and move into the project folder:
+
+   ```sh
+   git clone https://github.com/dan-mckay/sample-splitter.git
+   cd sample-splitter
+   ```
+
+2. Run any command by prefixing it with `uv run`:
+
+   ```sh
+   uv run sample-splitter --help
+   ```
+
+   The very first command you run will take a minute or two, since `uv` downloads Python 3.12 and installs the project's dependencies behind the scenes. Every run after that is fast.
+
+There are three subcommands, meant to be run one after another as separate steps against your sample library:
+
+```sh
+uv run sample-splitter scan  <path-to-your-sample-library>
+uv run sample-splitter split <path-to-your-sample-library>
+uv run sample-splitter name  <path-to-your-sample-library>
+```
+
+- **`scan`** looks at your files and reports what it finds — nothing is written or changed yet.
+- **`split`** cuts each track into individual sample files.
+- **`name`** listens to each sample and files it into a folder based on what it sounds like (kick, snare, stab, etc.).
+
+**Current status**: the project is being built one piece at a time. Right now, all three commands are "stubs" — running one loads the configuration and prints the settings it would use, but doesn't yet actually scan, split, or classify real audio. That real functionality is being added step by step; see the project's GitHub issues for progress.
+
 ## The classification model
 
 The `name` command classifies samples with [CLAP](https://huggingface.co/laion/clap-htsat-unfused) (`laion/clap-htsat-unfused`), a zero-shot audio classification model from LAION, downloaded from Hugging Face.
