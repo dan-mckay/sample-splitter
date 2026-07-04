@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Splits 90s sample-CD rips into individual samples and files them into a categorised, sampler-ready library"
 requires-python = "==3.12.*"
 dependencies = [
+    "numpy>=2.5.0",
+    "soundfile>=0.14.0",
     "typer>=0.12",
 ]
 
