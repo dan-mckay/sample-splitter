@@ -5,6 +5,14 @@ min_sample_ms = 100
 head_pad_ms = 10
 tail_pad_ms = 50
 
+[analysis]
+window_ms = 10.0
+montage_floor_db = -55.0
+montage_min_duration_s = 30.0
+montage_max_gap_count = 1
+expected_min_segments = 5
+expected_max_segments = 15
+
 [naming]
 review_threshold = 0.5
 
