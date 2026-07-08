@@ -157,6 +157,38 @@ def test_analyze_track_keeps_short_splittable_track_with_near_silent_gap(tmp_pat
     assert result.track_class == analysis.TrackClass.SPLITTABLE
 
 
+def test_pad_segment_widens_start_and_end_by_head_and_tail_padding():
+    segment = analysis.Segment(start_s=1.0, end_s=2.0)
+
+    padded = analysis.pad_segment(segment, duration_s=10.0, head_pad_s=0.1, tail_pad_s=0.3)
+
+    assert padded.start_s == pytest.approx(0.9)
+    assert padded.end_s == pytest.approx(2.3)
+
+
+def test_pad_segment_clamps_to_track_bounds():
+    segment = analysis.Segment(start_s=0.05, end_s=9.9)
+
+    padded = analysis.pad_segment(segment, duration_s=10.0, head_pad_s=0.5, tail_pad_s=0.5)
+
+    assert padded.start_s == 0.0
+    assert padded.end_s == 10.0
+
+
+def test_pad_segment_clamps_to_neighboring_segments_to_avoid_overlap():
+    # Padding (0.3s tail + 0.3s head = 0.6s) exceeds the 0.2s gap between
+    # these two segments — without neighbor clamping the padded segments
+    # would overlap and duplicate audio between the two extracted files.
+    segment = analysis.Segment(start_s=1.0, end_s=2.0)
+
+    padded = analysis.pad_segment(
+        segment, duration_s=10.0, head_pad_s=0.3, tail_pad_s=0.3, prev_end_s=0.9, next_start_s=2.2
+    )
+
+    assert padded.start_s == 0.9
+    assert padded.end_s == 2.2
+
+
 def test_analyze_track_handles_zero_length_audio_without_crashing(tmp_path):
     audio = audio_io.AudioData(samples=np.zeros((0, 1)), sample_rate=44100, subtype="PCM_16")
 

@@ -38,15 +38,15 @@ There are three subcommands, meant to be run one after another as separate steps
 
 ```sh
 uv run sample-splitter scan  <path-to-your-sample-library>
-uv run sample-splitter split <path-to-your-sample-library>
+uv run sample-splitter split <path-to-your-sample-library> <path-to-write-output>
 uv run sample-splitter name  <path-to-your-sample-library>
 ```
 
 - **`scan`** looks at your files and reports what it finds — nothing is written or changed yet.
-- **`split`** cuts each track into individual sample files.
+- **`split`** cuts each track into individual sample files, written to the given output directory, and records every slice (and every skipped track) in a `manifest.json` there.
 - **`name`** listens to each sample and files it into a folder based on what it sounds like (kick, snare, stab, etc.).
 
-**Current status**: the project is being built one piece at a time. Right now, all three commands are "stubs" — running one loads the configuration and prints the settings it would use, but doesn't yet actually scan, split, or classify real audio. That real functionality is being added step by step; see the project's GitHub issues for progress.
+**Current status**: the project is being built one piece at a time. `scan` and `split` are fully implemented; `name` is still a "stub" — running it loads the configuration and prints the settings it would use, but doesn't yet actually classify real audio. That real functionality is being added step by step; see the project's GitHub issues for progress.
 
 ## The classification model
 

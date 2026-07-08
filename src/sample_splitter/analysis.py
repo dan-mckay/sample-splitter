@@ -161,6 +161,26 @@ def _is_outlier(track_class: TrackClass, segment_count: int, gap_count: int, con
     return gap_count > 0
 
 
+def pad_segment(
+    segment: Segment,
+    duration_s: float,
+    head_pad_s: float,
+    tail_pad_s: float,
+    prev_end_s: float = 0.0,
+    next_start_s: float | None = None,
+) -> Segment:
+    """Widen a detected segment by head/tail padding so fast transients and
+    decay tails aren't clipped. Clamped to the track's actual bounds so
+    padding near an edge can't request audio that doesn't exist, and to the
+    neighboring segments' own (unpadded) bounds so padding wider than the
+    gap between two segments can't make their extracted audio overlap."""
+    lower_bound = max(0.0, prev_end_s)
+    upper_bound = duration_s if next_start_s is None else min(duration_s, next_start_s)
+    start_s = max(lower_bound, segment.start_s - head_pad_s)
+    end_s = min(upper_bound, segment.end_s + tail_pad_s)
+    return Segment(start_s, end_s)
+
+
 def analyze_track(audio: AudioData, config: AnalysisConfig = AnalysisConfig()) -> TrackAnalysis:
     """The main entry point: audio in, segments and stats out. Detects gaps
     relative to the file's own measured noise floor, then classifies the

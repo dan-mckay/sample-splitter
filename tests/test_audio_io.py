@@ -30,6 +30,19 @@ def test_round_trip_preserves_rate_bit_depth_and_channels_flac(tmp_path):
     assert loaded.samples.shape == (100, 1)
 
 
+def test_extract_slices_samples_to_the_given_time_range_preserving_rate_and_subtype():
+    sample_rate = 44100
+    samples = np.arange(sample_rate, dtype=np.float64)[:, None]  # 1s of frame indices
+    audio = audio_io.AudioData(samples=samples, sample_rate=sample_rate, subtype="PCM_24")
+
+    sliced = audio_io.extract(audio, start_s=0.25, end_s=0.5)
+
+    assert sliced.sample_rate == 44100
+    assert sliced.subtype == "PCM_24"
+    assert sliced.samples.shape == (sample_rate // 4, 1)
+    assert sliced.samples[0, 0] == sample_rate // 4
+
+
 def test_probe_reports_format_bit_depth_channels_and_duration(tmp_path):
     samples = np.zeros((44100, 2), dtype=np.float64)
     audio_io.write(
