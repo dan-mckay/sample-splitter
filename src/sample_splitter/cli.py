@@ -6,7 +6,7 @@ from pathlib import Path
 import soundfile as sf
 import typer
 
-from sample_splitter import analysis, audio_io
+from sample_splitter import analysis, audio_io, manifest
 
 app = typer.Typer()
 
@@ -111,9 +111,71 @@ def scan(input_path: Path) -> None:
 
 
 @app.command()
-def split(ctx: typer.Context, input_path: Path) -> None:
-    """Extract detected samples from splittable tracks into a JSON manifest."""
-    _run_stub(ctx, input_path)
+def split(input_path: Path, output_path: Path) -> None:
+    """Extract every detected sample from splittable tracks into individual
+    FLAC files, skip montage tracks, and record every slice and skip in a
+    JSON manifest written to the output directory."""
+    if not input_path.is_dir():
+        typer.echo(f"Error: {input_path} is not a directory", err=True)
+        raise typer.Exit(code=1)
+    if output_path.exists() and not output_path.is_dir():
+        typer.echo(f"Error: {output_path} exists and is not a directory", err=True)
+        raise typer.Exit(code=1)
+
+    config = _load_default_config()
+    analysis_config = _build_analysis_config(config)
+    splitter = config["splitter"]
+    head_pad_s = splitter["head_pad_ms"] / 1000
+    tail_pad_s = splitter["tail_pad_ms"] / 1000
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    slices: list[manifest.SliceRecord] = []
+    skipped: list[manifest.SkippedRecord] = []
+
+    for file_path in sorted(input_path.iterdir()):
+        if not file_path.is_file():
+            continue
+        try:
+            audio = audio_io.load(file_path)
+        except sf.LibsndfileError:
+            skipped.append(manifest.SkippedRecord(source=file_path.name, reason="unreadable"))
+            typer.echo(f"{file_path.name}: skipped (unreadable)")
+            continue
+
+        result = analysis.analyze_track(audio, analysis_config)
+        if result.track_class is analysis.TrackClass.MONTAGE:
+            skipped.append(manifest.SkippedRecord(source=file_path.name, reason="montage"))
+            typer.echo(f"{file_path.name}: montage — not splittable, skipped")
+            continue
+
+        written = 0
+        for i, segment in enumerate(result.segments, start=1):
+            prev_end_s = result.segments[i - 2].end_s if i > 1 else 0.0
+            next_start_s = result.segments[i].start_s if i < len(result.segments) else None
+            padded = analysis.pad_segment(
+                segment, result.duration_s, head_pad_s, tail_pad_s, prev_end_s, next_start_s
+            )
+            sliced = audio_io.extract(audio, padded.start_s, padded.end_s)
+            output_name = f"{file_path.name}_{i:02d}.flac"
+            try:
+                audio_io.write(output_path / output_name, sliced)
+            except (sf.LibsndfileError, ValueError) as e:
+                skipped.append(manifest.SkippedRecord(source=f"{file_path.name} (sample {i})", reason=str(e)))
+                typer.echo(f"{file_path.name}: sample {i} skipped ({e})")
+                continue
+            slices.append(
+                manifest.SliceRecord(
+                    source=file_path.name,
+                    start_s=padded.start_s,
+                    end_s=padded.end_s,
+                    output_path=output_name,
+                )
+            )
+            written += 1
+        typer.echo(f"{file_path.name}: {written} sample(s) extracted")
+
+    manifest.write(output_path / "manifest.json", manifest.Manifest(slices=slices, skipped=skipped))
+    typer.echo(f"\n{len(slices)} sample(s) written, {len(skipped)} track(s) skipped")
 
 
 @app.command()

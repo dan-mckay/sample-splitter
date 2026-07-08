@@ -69,6 +69,19 @@ def load(path: Path) -> AudioData:
         return AudioData(samples=samples, sample_rate=f.samplerate, subtype=f.subtype)
 
 
+def extract(audio: AudioData, start_s: float, end_s: float) -> AudioData:
+    """Slice a loaded track's samples to [start_s, end_s), preserving its
+    sample rate and subtype so the slice can be written out at full source
+    fidelity."""
+    start_frame = round(start_s * audio.sample_rate)
+    end_frame = round(end_s * audio.sample_rate)
+    return AudioData(
+        samples=audio.samples[start_frame:end_frame],
+        sample_rate=audio.sample_rate,
+        subtype=audio.subtype,
+    )
+
+
 def write(path: Path, audio: AudioData) -> None:
     """Write samples back out preserving the original sample rate and
     subtype (bit depth) — no resampling or format conversion happens here."""
