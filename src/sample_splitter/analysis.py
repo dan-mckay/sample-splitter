@@ -58,6 +58,7 @@ class AnalysisConfig:
     montage_max_gap_count: int = 1
     expected_min_segments: int = 5
     expected_max_segments: int = 15
+    mismatch_tolerance: int = 0
 
 
 @dataclass(frozen=True)
@@ -152,12 +153,24 @@ def _classify_track(duration_s: float, floor_db: float, gap_count: int, config: 
     return TrackClass.MONTAGE if montage_signals >= 2 else TrackClass.SPLITTABLE
 
 
+def expected_segment_range(config: AnalysisConfig) -> tuple[int, int]:
+    """The segment-count range a splittable track (or a scan corpus median)
+    is expected to fall within, widened on both ends by `mismatch_tolerance`.
+    A negative tolerance is clamped to zero rather than inverting the range.
+    Shared by `_is_outlier`, `scan`'s corpus check, and `split`'s per-track
+    mismatch warning so none of the three can drift out of sync with the
+    others."""
+    tolerance = max(0, config.mismatch_tolerance)
+    return config.expected_min_segments - tolerance, config.expected_max_segments + tolerance
+
+
 def _is_outlier(track_class: TrackClass, segment_count: int, gap_count: int, config: AnalysisConfig) -> bool:
     """Flag tracks that don't fit the common pattern for their class: a
     splittable track with a wildly unusual sample count, or a montage that
     unexpectedly contains real gaps."""
     if track_class == TrackClass.SPLITTABLE:
-        return not (config.expected_min_segments <= segment_count <= config.expected_max_segments)
+        low, high = expected_segment_range(config)
+        return not (low <= segment_count <= high)
     return gap_count > 0
 
 

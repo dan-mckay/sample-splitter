@@ -126,6 +126,41 @@ def test_analyze_track_flags_splittable_outlier_with_too_few_segments(tmp_path):
     assert result.outlier is True
 
 
+def test_analyze_track_mismatch_tolerance_widens_the_expected_range(tmp_path):
+    path = tmp_path / "track.wav"
+    make_tone_sequence(path, tone_count=1, tone_ms=200, gap_ms=500)
+    audio = audio_io.load(path)
+    config = analysis.AnalysisConfig(mismatch_tolerance=4)
+
+    result = analysis.analyze_track(audio, config)
+
+    assert result.track_class == analysis.TrackClass.SPLITTABLE
+    assert result.outlier is False
+
+
+def test_analyze_track_negative_mismatch_tolerance_is_clamped_to_zero(tmp_path):
+    # A negative tolerance would invert expected_min/max into an empty
+    # range (low > high), flagging every splittable track as an outlier
+    # regardless of its actual segment count — clamp it to zero instead.
+    path = tmp_path / "track.wav"
+    make_tone_sequence(path, tone_count=10, tone_ms=200, gap_ms=500)
+    audio = audio_io.load(path)
+    config = analysis.AnalysisConfig(mismatch_tolerance=-3)
+
+    result = analysis.analyze_track(audio, config)
+
+    assert result.track_class == analysis.TrackClass.SPLITTABLE
+    assert result.outlier is False
+
+
+def test_expected_segment_range_widens_by_tolerance_and_clamps_negative():
+    config = analysis.AnalysisConfig(expected_min_segments=5, expected_max_segments=15, mismatch_tolerance=4)
+    assert analysis.expected_segment_range(config) == (1, 19)
+
+    negative_config = analysis.AnalysisConfig(expected_min_segments=5, expected_max_segments=15, mismatch_tolerance=-3)
+    assert analysis.expected_segment_range(negative_config) == (5, 15)
+
+
 def test_analyze_track_flags_montage_outlier_with_unexpected_gap(tmp_path):
     path = tmp_path / "track.wav"
     # Enough montage pattern either side that the inserted gap stays a small
