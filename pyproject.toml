@@ -7,6 +7,8 @@ dependencies = [
     "numpy>=2.5.0",
     "soundfile>=0.14.0",
     "typer>=0.12",
+    "transformers>=4.45.0",
+    "torch>=2.4.0",
 ]
 
 [project.scripts]
@@ -23,3 +25,7 @@ packages = ["src/sample_splitter"]
 dev = [
     "pytest>=8.0",
 ]
+
+[tool.pytest.ini_options]
+markers = ["slow: requires network access and the real CLAP model download"]
+addopts = "-m 'not slow'"

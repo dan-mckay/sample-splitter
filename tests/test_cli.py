@@ -847,3 +847,26 @@ def test_name_reports_clean_error_when_output_path_is_an_existing_file(tmp_path)
 
     assert result.exit_code == 1
     assert "is not a directory" in result.stderr
+
+
+def test_name_defaults_to_the_stub_backend_without_touching_the_network(tmp_path):
+    # No --backend flag, no CLAP-only setup — this must resolve to the
+    # packaged config's naming.backend = "stub" and never attempt a model
+    # load, or every other `name` test in this suite would hit the network.
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "clean.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+
+
+def test_name_backend_flag_rejects_an_unrecognised_value(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "clean.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir), "--backend", "bogus"])
+
+    assert result.exit_code != 0
