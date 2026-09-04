@@ -39,18 +39,18 @@ There are three subcommands, meant to be run one after another as separate steps
 ```sh
 uv run sample-splitter scan  <path-to-your-sample-library>
 uv run sample-splitter split <path-to-your-sample-library> <path-to-write-output>
-uv run sample-splitter name  <path-to-your-sample-library>
+uv run sample-splitter name  <path-to-split-output-or-a-folder-of-samples> <path-to-write-library>
 ```
 
 - **`scan`** looks at your files and reports what it finds — nothing is written or changed yet.
 - **`split`** cuts each track into individual sample files, written to the given output directory, and records every slice (and every skipped track) in a `manifest.json` there.
-- **`name`** listens to each sample and files it into a folder based on what it sounds like (kick, snare, stab, etc.).
+- **`name`** classifies each sample and files it into `category/subtype/` folders (kick, snare, stab, etc.) under the given output directory, routing low-confidence results to a `_review/` folder instead of guessing. It reads a `split` manifest when the input folder has one, or works standalone on any folder of samples. Rerunning with a different `--review-threshold` re-files samples without re-splitting.
 
-**Current status**: the project is being built one piece at a time. `scan` and `split` are fully implemented; `name` is still a "stub" — running it loads the configuration and prints the settings it would use, but doesn't yet actually classify real audio. That real functionality is being added step by step; see the project's GitHub issues for progress.
+**Current status**: the project is being built one piece at a time. `scan`, `split`, and the `name` filing logic (numbering, collisions, FAT-safe names, `_review/` routing) are fully implemented, driven by a trivial deterministic placeholder classifier. The real audio classification model described below is not wired up yet; see the project's GitHub issues for progress.
 
 ## The classification model
 
-The `name` command classifies samples with [CLAP](https://huggingface.co/laion/clap-htsat-unfused) (`laion/clap-htsat-unfused`), a zero-shot audio classification model from LAION, downloaded from Hugging Face.
+**Not yet implemented** — `name` currently uses a deterministic placeholder classifier so the filing logic could be built and tested without the model download. The plan is for the `name` command to eventually classify samples with [CLAP](https://huggingface.co/laion/clap-htsat-unfused) (`laion/clap-htsat-unfused`), a zero-shot audio classification model from LAION, downloaded from Hugging Face. The rest of this section describes that future behaviour.
 
 - **Download is automatic**: the first `name` run fetches the model (~600MB) and caches it; later runs load from the cache. No Hugging Face account is needed.
 - **To pre-download manually** (e.g. before going offline):

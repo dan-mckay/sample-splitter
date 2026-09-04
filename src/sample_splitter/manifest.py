@@ -45,3 +45,37 @@ def read(path: Path) -> Manifest:
         slices=[SliceRecord(**s) for s in data["slices"]],
         skipped=[SkippedRecord(**s) for s in data["skipped"]],
     )
+
+
+@dataclass(frozen=True)
+class NameRecord:
+    """One filed sample: which input sample it came from, the classification
+    that was assigned, and where it currently lives under the `name` output
+    root. `source` plus the original split/input directory is enough to
+    reverse a rename — the untouched original is always still there."""
+
+    source: str
+    category: str
+    subtype: str
+    confidence: float
+    review: bool
+    output_path: str
+
+
+@dataclass(frozen=True)
+class NamingManifest:
+    """The full record of one `name` run — every input sample's assigned
+    name, category/subtype, and confidence, so a rerun with a different
+    threshold can re-file without recomputing from nothing."""
+
+    names: list[NameRecord] = field(default_factory=list)
+
+
+def write_naming(path: Path, naming_manifest: NamingManifest) -> None:
+    data = {"names": [asdict(n) for n in naming_manifest.names]}
+    path.write_text(json.dumps(data, indent=2))
+
+
+def read_naming(path: Path) -> NamingManifest:
+    data = json.loads(path.read_text())
+    return NamingManifest(names=[NameRecord(**n) for n in data["names"]])
