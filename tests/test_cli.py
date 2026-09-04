@@ -10,6 +10,40 @@ from tests.fixtures import make_track, make_tone_sequence
 
 runner = CliRunner()
 
+_DEFAULT_SPLITTER_CONFIG = {
+    "threshold_db": 20.0,
+    "min_gap_ms": 300,
+    "min_sample_ms": 100,
+    "head_pad_ms": 10,
+    "tail_pad_ms": 50,
+}
+_DEFAULT_ANALYSIS_CONFIG = {
+    "window_ms": 10.0,
+    "montage_floor_db": -55.0,
+    "montage_min_duration_s": 30.0,
+    "montage_max_gap_count": 1,
+    "expected_min_segments": 5,
+    "expected_max_segments": 15,
+    "mismatch_tolerance": 0,
+}
+
+
+def write_config(path, splitter=None, analysis=None, file_overrides=None):
+    """Write a minimal custom TOML config for `split --config`, overriding
+    only the keys a test cares about — so each test states just what makes
+    it different, instead of repeating every tunable."""
+    splitter_values = {**_DEFAULT_SPLITTER_CONFIG, **(splitter or {})}
+    analysis_values = {**_DEFAULT_ANALYSIS_CONFIG, **(analysis or {})}
+
+    lines = ["[splitter]"]
+    lines += [f"{key} = {value}" for key, value in splitter_values.items()]
+    for file_name, overrides in (file_overrides or {}).items():
+        lines.append(f'\n[splitter.overrides."{file_name}"]')
+        lines += [f"{key} = {value}" for key, value in overrides.items()]
+    lines.append("\n[analysis]")
+    lines += [f"{key} = {value}" for key, value in analysis_values.items()]
+    path.write_text("\n".join(lines))
+
 
 def test_help_lists_all_subcommands():
     result = runner.invoke(app, ["--help"])
@@ -282,6 +316,83 @@ def test_split_reports_clean_error_when_output_path_is_an_existing_file(tmp_path
     assert "is not a directory" in result.stderr
 
 
+def test_split_dry_run_also_reports_clean_error_when_output_path_is_an_existing_file(tmp_path):
+    # --dry-run never touches output_path, but it should still fail fast on
+    # a run that's guaranteed to fail once the user drops --dry-run, rather
+    # than reporting a clean preview for a run that can't actually happen.
+    input_dir, output_path = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "track.wav", tone_count=1, tone_ms=200, gap_ms=500)
+    output_path.write_text("not a directory")
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_path), "--dry-run"])
+
+    assert result.exit_code == 1
+    assert "is not a directory" in result.stderr
+
+
+def test_split_reports_clean_error_for_missing_config_file(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "track.wav", tone_count=1, tone_ms=200, gap_ms=500)
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--config", str(tmp_path / "missing.toml")])
+
+    assert result.exit_code == 1
+    assert "could not read config file" in result.stderr
+
+
+def test_split_reports_clean_error_for_config_missing_a_required_key(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "track.wav", tone_count=1, tone_ms=200, gap_ms=500)
+    config_path = tmp_path / "incomplete.toml"
+    config_path.write_text("[splitter]\nthreshold_db = 20.0\n")
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--config", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "invalid config file" in result.stderr
+
+
+def test_split_dry_run_summary_includes_skipped_track_count(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_track(input_dir / "demo.wav", [("noise", 400, -10.0), ("noise", 50, -45.0)] * 5)
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "0 sample(s) proposed, 1 track(s) skipped, no files written (dry run)" in result.stdout
+
+
+def test_scan_corpus_check_applies_mismatch_tolerance_consistently_with_outlier_flag(tmp_path, monkeypatch):
+    # Same range widening `_is_outlier` applies per-track must also apply to
+    # the corpus-wide median check, or the two could contradict each other:
+    # a corpus where no individual track is flagged an outlier must never
+    # report a corpus-level mismatch. `scan` has no --config flag of its own
+    # (out of this issue's scope), so the widened tolerance is injected by
+    # patching the loaded config rather than adding one just for this test.
+    for i in range(3):
+        make_tone_sequence(tmp_path / f"track_{i}.wav", tone_count=2, tone_ms=200, gap_ms=500)
+    from sample_splitter import cli as cli_module
+
+    original_load = cli_module._load_default_config
+
+    def patched_load():
+        config = original_load()
+        config["analysis"]["mismatch_tolerance"] = 4
+        return config
+
+    monkeypatch.setattr(cli_module, "_load_default_config", patched_load)
+
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "OUTLIER" not in result.stdout
+    assert "matches the expected ~10-samples-per-track pattern" in result.stdout
+
+
 def test_split_skips_a_sample_flac_cannot_encode_without_crashing_the_run(tmp_path):
     input_dir, output_dir = tmp_path / "in", tmp_path / "out"
     input_dir.mkdir()
@@ -298,6 +409,185 @@ def test_split_skips_a_sample_flac_cannot_encode_without_crashing_the_run(tmp_pa
     manifest_data = json.loads((output_dir / "manifest.json").read_text())
     assert manifest_data["skipped"][0]["source"].startswith("track.wav (sample")
     assert list(output_dir.glob("*.flac")) == []
+
+
+def test_split_dry_run_writes_nothing_and_reports_proposed_counts(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "track.wav", tone_count=2, tone_ms=200, gap_ms=500)
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "track.wav: 2 sample(s) proposed" in result.stdout
+    assert not output_dir.exists()
+
+
+def test_split_dry_run_does_not_touch_an_existing_output_directory(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "track.wav", tone_count=2, tone_ms=200, gap_ms=500)
+    runner.invoke(app, ["split", str(input_dir), str(output_dir)])
+    before = {p.name: p.read_bytes() for p in output_dir.iterdir()}
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run"])
+
+    assert result.exit_code == 0
+    after = {p.name: p.read_bytes() for p in output_dir.iterdir()}
+    assert after == before
+
+
+def test_split_dry_run_prints_proposed_split_points(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "track.wav", tone_count=1, tone_ms=200, gap_ms=500)
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run"])
+
+    assert result.exit_code == 0
+    # Default 10ms head pad — the tone itself starts at 0s, so the proposed
+    # point should start before it once padding is applied.
+    assert "01: 0.000s - " in result.stdout
+
+
+def test_split_min_gap_ms_flag_overrides_config_for_this_run(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    # A 200ms gap sits below the default 300ms min_gap_ms, so by default the
+    # two tones merge into one segment — lowering the flag below 200ms
+    # should let the gap register and split them into two.
+    make_track(input_dir / "track.wav", [("tone", 200), ("gap", 200), ("tone", 200)])
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run", "--min-gap-ms", "100"])
+
+    assert result.exit_code == 0
+    assert "track.wav: 2 sample(s) proposed" in result.stdout
+
+
+def test_split_threshold_db_flag_overrides_config_for_this_run(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    # A big low-noise block anchors the measured floor around -85dBFS; the
+    # -35dB "candidate gap" between the tones sits ~50dB above that floor, so
+    # the default 20dB threshold reads it as active audio (one merged
+    # segment). Widening the threshold to 50dB should bring it under the
+    # quiet cutoff instead, splitting the run into two segments.
+    make_track(
+        input_dir / "track.wav",
+        [("noise", 600, -80.0), ("tone", 200), ("noise", 350, -35.0), ("tone", 200)],
+    )
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run"])
+    assert "track.wav: 1 sample(s) proposed" in result.stdout
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run", "--threshold-db", "50"])
+    assert "track.wav: 2 sample(s) proposed" in result.stdout
+
+
+def test_split_head_pad_ms_flag_widens_proposed_split_points(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_track(input_dir / "track.wav", [("gap", 600), ("tone", 200), ("gap", 600)])
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run", "--head-pad-ms", "100"])
+
+    assert result.exit_code == 0
+    # Default head pad is 10ms (tone starts at 0.6s); a 100ms override should
+    # pull the proposed start earlier than the default would.
+    assert "01: 0.500s - " in result.stdout
+
+
+def test_split_tail_pad_ms_flag_widens_proposed_split_points(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_track(input_dir / "track.wav", [("gap", 600), ("tone", 200), ("gap", 600)])
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run", "--tail-pad-ms", "200"])
+
+    assert result.exit_code == 0
+    # Default tail pad is 50ms (tone ends at 0.8s); a 200ms override should
+    # push the proposed end later than the default would.
+    assert " - 1.000s" in result.stdout
+
+
+def test_split_reads_tunable_from_custom_config_file(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_track(input_dir / "track.wav", [("tone", 200), ("gap", 200), ("tone", 200)])
+    config_path = tmp_path / "custom.toml"
+    write_config(config_path, splitter={"min_gap_ms": 100})
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "track.wav: 2 sample(s) proposed" in result.stdout
+
+
+def test_split_cli_flag_takes_precedence_over_custom_config_value(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_track(input_dir / "track.wav", [("tone", 200), ("gap", 200), ("tone", 200)])
+    config_path = tmp_path / "custom.toml"
+    write_config(config_path, splitter={"min_gap_ms": 100})
+
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            str(input_dir),
+            str(output_dir),
+            "--dry-run",
+            "--config",
+            str(config_path),
+            "--min-gap-ms",
+            "300",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "track.wav: 1 sample(s) proposed" in result.stdout
+
+
+def test_split_per_file_override_applies_only_to_the_named_file(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_track(input_dir / "special.wav", [("tone", 200), ("gap", 200), ("tone", 200)])
+    make_track(input_dir / "other.wav", [("tone", 200), ("gap", 200), ("tone", 200)])
+    config_path = tmp_path / "custom.toml"
+    write_config(config_path, file_overrides={"special.wav": {"min_gap_ms": 100}})
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--dry-run", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "special.wav: 2 sample(s) proposed" in result.stdout
+    assert "other.wav: 1 sample(s) proposed" in result.stdout
+
+
+def test_split_warns_when_detected_count_diverges_from_scan_expectation(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    # Default expected range is 5-15 segments; a single-tone track
+    # under-splits relative to that, so it should surface a warning.
+    make_tone_sequence(input_dir / "track.wav", tone_count=1, tone_ms=200, gap_ms=500)
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert "WARNING" in result.stdout
+    assert "track.wav" in result.stdout
+
+
+def test_split_mismatch_tolerance_suppresses_warning_within_slack(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "track.wav", tone_count=1, tone_ms=200, gap_ms=500)
+    config_path = tmp_path / "custom.toml"
+    write_config(config_path, analysis={"mismatch_tolerance": 4})
+
+    result = runner.invoke(app, ["split", str(input_dir), str(output_dir), "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "WARNING" not in result.stdout
 
 
 def test_split_reports_clean_error_for_missing_directory(tmp_path):
