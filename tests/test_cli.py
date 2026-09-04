@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from sample_splitter import audio_io
+from sample_splitter import audio_io, manifest
 from sample_splitter.cli import app
 from tests.fixtures import make_track, make_tone_sequence
 
@@ -52,15 +52,6 @@ def test_help_lists_all_subcommands():
     assert "scan" in result.stdout
     assert "split" in result.stdout
     assert "name" in result.stdout
-
-
-def test_stub_prints_resolved_settings(tmp_path):
-    result = runner.invoke(app, ["name", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert str(tmp_path) in result.stdout
-    assert "threshold_db" in result.stdout
-    assert "taxonomy" in result.stdout
 
 
 def test_scan_reports_wav_file_inventory(tmp_path):
@@ -609,6 +600,250 @@ def test_scan_reports_clean_error_when_given_a_file(tmp_path):
     make_tone_sequence(file_path, tone_count=1, tone_ms=200, gap_ms=500)
 
     result = runner.invoke(app, ["scan", str(file_path)])
+
+    assert result.exit_code == 1
+    assert "is not a directory" in result.stderr
+
+
+# Tone frequencies below are pinned to specific StubClassifier outcomes
+# against the real default.toml taxonomy (found by brute-force search over
+# the stub's hash-derived confidence) — not arbitrary values.
+_CLEAN_HZ = 220.0  # -> drums/perc, confidence 0.678 (>= 0.5 default threshold)
+_CLEAN_HZ_ALT = 670.0  # -> drums/perc, confidence 0.808 (same bucket as _CLEAN_HZ)
+_REVIEW_HZ = 240.0  # -> fx/noise, confidence 0.05 (< 0.5 default threshold)
+_JUST_ABOVE_HZ = 340.0  # -> guitar/riff, confidence 0.588 (0.5 <= x < 0.6)
+
+
+def test_name_files_a_high_confidence_sample_into_category_subtype_dir(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "clean.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert (output_dir / "drums" / "perc" / "perc_01.flac").exists()
+
+
+def test_name_routes_a_low_confidence_sample_to_review(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "unsure.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_REVIEW_HZ)
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert (output_dir / "_review" / "fx" / "noise" / "noise_01.flac").exists()
+    assert not (output_dir / "fx").exists()
+
+
+def test_name_records_category_subtype_and_confidence_in_the_manifest(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "clean.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+
+    runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    manifest_data = json.loads((output_dir / "naming.json").read_text())
+    assert manifest_data["names"] == [
+        {
+            "source": "clean.flac",
+            "category": "drums",
+            "subtype": "perc",
+            "confidence": 0.678,
+            "review": False,
+            "output_path": "drums/perc/perc_01.flac",
+        }
+    ]
+
+
+def test_name_works_standalone_on_a_plain_folder_with_no_manifest(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "one_shot.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert (output_dir / "drums" / "perc" / "perc_01.flac").exists()
+
+
+def test_name_reads_samples_from_a_split_manifest_when_present(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "track.wav_01.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+    manifest.write(
+        input_dir / "manifest.json",
+        manifest.Manifest(
+            slices=[
+                manifest.SliceRecord(
+                    source="track.wav", start_s=0.0, end_s=0.2, output_path="track.wav_01.flac"
+                )
+            ],
+            skipped=[manifest.SkippedRecord(source="demo.wav", reason="montage")],
+        ),
+    )
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert (output_dir / "drums" / "perc" / "perc_01.flac").exists()
+    manifest_data = json.loads((output_dir / "naming.json").read_text())
+    assert manifest_data["names"][0]["source"] == "track.wav_01.flac"
+
+
+def test_name_skips_a_manifest_entry_whose_output_file_is_missing(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    manifest.write(
+        input_dir / "manifest.json",
+        manifest.Manifest(
+            slices=[
+                manifest.SliceRecord(
+                    source="track.wav", start_s=0.0, end_s=0.2, output_path="missing.flac"
+                )
+            ],
+        ),
+    )
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert "skipped" in result.stdout
+    manifest_data = json.loads((output_dir / "naming.json").read_text())
+    assert manifest_data["names"] == []
+
+
+def test_name_assigns_collision_free_numbering_within_the_same_bucket(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "a.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+    make_tone_sequence(input_dir / "b.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ_ALT)
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert sorted(p.name for p in (output_dir / "drums" / "perc").glob("*.flac")) == ["perc_01.flac", "perc_02.flac"]
+
+
+def test_name_is_idempotent_on_rerun(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "clean.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+
+    runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+    before = (output_dir / "drums" / "perc" / "perc_01.flac").read_bytes()
+    runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+    after = (output_dir / "drums" / "perc" / "perc_01.flac").read_bytes()
+
+    assert before == after
+    assert list((output_dir / "drums" / "perc").glob("*.flac")) == [output_dir / "drums" / "perc" / "perc_01.flac"]
+
+
+def test_name_never_modifies_the_input_sample(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    source = input_dir / "clean.flac"
+    make_tone_sequence(source, tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+    before = source.read_bytes()
+
+    runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert source.read_bytes() == before
+
+
+def test_name_rerunning_with_a_lower_threshold_moves_a_review_sample_into_the_clean_tree(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "borderline.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_JUST_ABOVE_HZ)
+
+    runner.invoke(app, ["name", str(input_dir), str(output_dir), "--review-threshold", "0.6"])
+    assert (output_dir / "_review" / "guitar" / "riff" / "riff_01.flac").exists()
+
+    runner.invoke(app, ["name", str(input_dir), str(output_dir), "--review-threshold", "0.5"])
+
+    assert (output_dir / "guitar" / "riff" / "riff_01.flac").exists()
+    assert not (output_dir / "_review" / "guitar").exists()
+    manifest_data = json.loads((output_dir / "naming.json").read_text())
+    assert manifest_data["names"][0]["review"] is False
+    assert manifest_data["names"][0]["output_path"] == "guitar/riff/riff_01.flac"
+
+
+def test_name_removes_output_file_when_its_source_disappears(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "unsure.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_REVIEW_HZ)
+    runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+    assert (output_dir / "_review" / "fx" / "noise" / "noise_01.flac").exists()
+
+    (input_dir / "unsure.flac").unlink()
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert "1 removed" in result.stdout
+    assert not (output_dir / "_review" / "fx").exists()
+    manifest_data = json.loads((output_dir / "naming.json").read_text())
+    assert manifest_data["names"] == []
+
+
+def test_name_reclaims_a_vanished_sources_slot_without_orphaning_or_overwriting(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "a.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+    runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+    assert (output_dir / "drums" / "perc" / "perc_01.flac").exists()
+
+    (input_dir / "a.flac").unlink()
+    make_tone_sequence(input_dir / "b.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ_ALT)
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    manifest_data = json.loads((output_dir / "naming.json").read_text())
+    assert {r["source"] for r in manifest_data["names"]} == {"b.flac"}
+    assert sorted(p.name for p in (output_dir / "drums" / "perc").glob("*.flac")) == ["perc_01.flac"]
+    filed = audio_io.load(output_dir / "drums" / "perc" / "perc_01.flac")
+    original_b = audio_io.load(input_dir / "b.flac")
+    assert np.allclose(filed.samples, original_b.samples, atol=1e-4)
+
+
+def test_name_reports_clean_error_for_a_malformed_split_manifest(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    (input_dir / "manifest.json").write_text("not json")
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 1
+    assert "malformed manifest" in result.stderr
+
+
+def test_name_reports_clean_error_for_a_malformed_naming_manifest(tmp_path):
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "clean.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+    output_dir.mkdir()
+    (output_dir / "naming.json").write_text("{}")
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 1
+    assert "malformed naming manifest" in result.stderr
+
+
+def test_name_reports_clean_error_for_missing_directory(tmp_path):
+    result = runner.invoke(app, ["name", str(tmp_path / "does-not-exist"), str(tmp_path / "out")])
+
+    assert result.exit_code == 1
+    assert "is not a directory" in result.stderr
+
+
+def test_name_reports_clean_error_when_output_path_is_an_existing_file(tmp_path):
+    input_dir, output_path = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "clean.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+    output_path.write_text("not a directory")
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_path)])
 
     assert result.exit_code == 1
     assert "is not a directory" in result.stderr
