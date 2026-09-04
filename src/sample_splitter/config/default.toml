@@ -16,6 +16,7 @@ mismatch_tolerance = 0
 
 [naming]
 review_threshold = 0.5
+backend = "stub"
 
 [taxonomy]
 drums = ["kick", "snare", "hat", "tom", "cymbal", "perc"]

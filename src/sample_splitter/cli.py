@@ -309,10 +309,16 @@ def name(
     input_path: Path,
     output_path: Path,
     review_threshold: float = typer.Option(None, help="Override the configured naming.review_threshold"),
+    backend: classifier.NamingBackend = typer.Option(
+        None, help="Override the configured naming.backend ('stub' or 'clap')."
+    ),
 ) -> None:
-    """Classify samples with the stub classifier and file them into
-    `category/subtype/` directories under the output path, routing results
-    below the confidence threshold to `_review/`. Reads a split manifest if
+    """Classify samples and file them into `category/subtype/` directories
+    under the output path, routing results below the confidence threshold to
+    `_review/`. The classifier backend defaults to naming.backend in config
+    ('stub', a fast deterministic placeholder, unless changed) — pass
+    --backend clap to classify with the real local CLAP model instead; its
+    first run downloads a ~600MB checkpoint. Reads a split manifest if
     `input_path` has one, otherwise scans the folder directly. Rerunning
     (optionally with a different --review-threshold) re-files samples in
     place without touching input_path, and removes the filed output for any
@@ -333,6 +339,11 @@ def name(
     config = _load_default_config()
     taxonomy = config["taxonomy"]
     threshold = review_threshold if review_threshold is not None else config["naming"]["review_threshold"]
+    try:
+        backend_choice = backend if backend is not None else classifier.NamingBackend(config["naming"]["backend"])
+    except ValueError:
+        typer.echo(f"Error: unknown naming.backend {config['naming']['backend']!r} (expected 'stub' or 'clap')", err=True)
+        raise typer.Exit(code=1)
 
     output_path.mkdir(parents=True, exist_ok=True)
     naming_manifest_path = output_path / "naming.json"
@@ -375,7 +386,9 @@ def name(
             used_indices.get(stale_bucket, set()).discard(stale_index)
         removed += 1
 
-    backend = classifier.StubClassifier()
+    classifier_backend: classifier.Classifier = (
+        classifier.StubClassifier() if backend_choice is classifier.NamingBackend.STUB else classifier.ClapClassifier()
+    )
     new_records: list[manifest.NameRecord] = []
     filed = reviewed = 0
 
@@ -385,7 +398,7 @@ def name(
         except sf.LibsndfileError:
             typer.echo(f"{source}: skipped (unreadable)")
             continue
-        result = backend.classify(audio, taxonomy)
+        result = classifier_backend.classify(audio, taxonomy)
         safe_category = naming.sanitize(result.category)
         safe_subtype = naming.sanitize(result.subtype)
         review = naming.is_review(result.confidence, threshold)
