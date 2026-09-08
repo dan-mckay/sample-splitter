@@ -14,6 +14,19 @@ expected_min_segments = 5
 expected_max_segments = 15
 mismatch_tolerance = 0
 
+[splitter.overrides."83 Electribe 101.flac"]
+# This file has ~3.9s of bit-exact digital silence at its tail — much
+# quieter than its real between-hit gaps (~-105 dBFS, same as every other
+# track on this disc). The 10th-percentile floor estimator locks onto that
+# trailing silence instead, giving a ~-280 dBFS floor and a "quiet" cutoff so
+# low that all 20 real hits merge into one blob. A much higher threshold_db
+# compensates: (-280 + 200) = -80 dBFS sits between the real gaps (~-105,
+# correctly quiet) and the quietest hit (~-53, correctly loud). Verified
+# against the file directly — correctly finds 20 short (0.13-0.34s) hits,
+# consistent with the owner's identification of this track as a series of
+# Electribe 101 drum machine one-shots.
+threshold_db = 200.0
+
 [naming]
 review_threshold = 0.5
 backend = "stub"
