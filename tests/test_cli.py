@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from sample_splitter import audio_io, manifest
+from sample_splitter import audio_io, manifest, naming
 from sample_splitter.classifier import StubClassifier
 from sample_splitter.cli import app
 from tests.fixtures import make_track, make_tone_sequence
@@ -32,11 +32,11 @@ def _stub_result(tone_hz):
 
 
 def _filed_path(result, index=1):
-    return Path(result.category) / result.subtype / f"{result.subtype}_{index:02d}.flac"
+    return naming.relative_path(result.category, result.subtype, index, review=False)
 
 
 def _review_path(result, index=1):
-    return Path("_review") / result.category / result.subtype / f"{result.subtype}_{index:02d}.flac"
+    return naming.relative_path(result.category, result.subtype, index, review=True)
 
 _DEFAULT_SPLITTER_CONFIG = {
     "threshold_db": 20.0,
@@ -645,6 +645,7 @@ _CLEAN_HZ = 110.0  # confidence 0.663 (>= 0.5 default threshold)
 _CLEAN_HZ_ALT = 330.0  # confidence 0.549, same bucket as _CLEAN_HZ
 _REVIEW_HZ = 160.0  # confidence 0.074 (< 0.5 default threshold)
 _JUST_ABOVE_HZ = 460.0  # confidence 0.543 (0.5 <= x < 0.6)
+_REVIEW_HZ_DIFFERENT_BUCKET = 100.0  # confidence 0.402 (< 0.5), different guessed bucket than _REVIEW_HZ
 
 
 def test_name_files_a_high_confidence_sample_into_category_subtype_dir(tmp_path):
@@ -669,6 +670,31 @@ def test_name_routes_a_low_confidence_sample_to_review(tmp_path):
     assert result.exit_code == 0
     assert (output_dir / _review_path(review_result)).exists()
     assert not (output_dir / review_result.category).exists()
+
+
+def test_name_review_samples_share_one_flat_numbering_pool_regardless_of_guess(tmp_path):
+    # Two samples the model guesses into different (low-confidence) buckets
+    # still land in the same flat _review/ pool with sequential numbering —
+    # the guess is recorded in the manifest, but never shapes where the
+    # file ends up, so a wrong guess never needs a rename to fix.
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    input_dir.mkdir()
+    make_tone_sequence(input_dir / "a.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_REVIEW_HZ)
+    make_tone_sequence(
+        input_dir / "b.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_REVIEW_HZ_DIFFERENT_BUCKET
+    )
+    a_result = _stub_result(_REVIEW_HZ)
+    b_result = _stub_result(_REVIEW_HZ_DIFFERENT_BUCKET)
+    assert (a_result.category, a_result.subtype) != (b_result.category, b_result.subtype)
+
+    result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
+
+    assert result.exit_code == 0
+    assert sorted(p.name for p in (output_dir / "_review").glob("*.flac")) == ["misc_01.flac", "misc_02.flac"]
+    manifest_data = json.loads((output_dir / "naming.json").read_text())
+    by_source = {r["source"]: r for r in manifest_data["names"]}
+    assert by_source["a.flac"]["category"] == a_result.category
+    assert by_source["b.flac"]["category"] == b_result.category
 
 
 def test_name_records_category_subtype_and_confidence_in_the_manifest(tmp_path):
@@ -806,7 +832,8 @@ def test_name_rerunning_with_a_lower_threshold_moves_a_review_sample_into_the_cl
 
     filed_path = _filed_path(borderline_result)
     assert (output_dir / filed_path).exists()
-    assert not (output_dir / "_review" / borderline_result.category).exists()
+    assert not (output_dir / _review_path(borderline_result)).exists()
+    assert not (output_dir / "_review").exists()
     manifest_data = json.loads((output_dir / "naming.json").read_text())
     assert manifest_data["names"][0]["review"] is False
     assert manifest_data["names"][0]["output_path"] == str(filed_path)
@@ -825,7 +852,8 @@ def test_name_removes_output_file_when_its_source_disappears(tmp_path):
 
     assert result.exit_code == 0
     assert "1 removed" in result.stdout
-    assert not (output_dir / "_review" / review_result.category).exists()
+    assert not (output_dir / _review_path(review_result)).exists()
+    assert not (output_dir / "_review").exists()
     manifest_data = json.loads((output_dir / "naming.json").read_text())
     assert manifest_data["names"] == []
 

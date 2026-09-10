@@ -79,6 +79,17 @@ def _format_track_analysis(result: analysis.TrackAnalysis) -> str:
     return f"  {detail} [OUTLIER]" if result.outlier else f"  {detail}"
 
 
+def _numbering_bucket(category: str, subtype: str, review: bool) -> tuple[str, str, bool]:
+    """The key used to track numbering/collision state and detect whether a
+    sample's output location needs to change between runs. Review results
+    all share one flat pool (naming.relative_path ignores category/subtype
+    for them), so every review result collapses to the same bucket
+    regardless of the model's guess — otherwise a sample whose top guess
+    merely shifts between runs (e.g. after a taxonomy edit) would be treated
+    as "moved" and get needlessly reassigned to a new slot."""
+    return ("_review", "_review", True) if review else (category, subtype, False)
+
+
 def _prune_empty_dirs(start: Path, root: Path) -> None:
     """Remove `start` and any now-empty ancestor directories up to (but not
     including) `root`, so demoting a sample out of `_review/` or a category
@@ -360,7 +371,7 @@ def name(
 
     used_indices: dict[tuple[str, str, bool], set[int]] = {}
     for record in previous.names:
-        bucket = (record.category, record.subtype, record.review)
+        bucket = _numbering_bucket(record.category, record.subtype, record.review)
         index = naming.parse_index(record.output_path)
         if index is not None:
             used_indices.setdefault(bucket, set()).add(index)
@@ -380,7 +391,7 @@ def name(
         if stale_path.exists():
             stale_path.unlink()
             _prune_empty_dirs(stale_path.parent, output_path)
-        stale_bucket = (stale_record.category, stale_record.subtype, stale_record.review)
+        stale_bucket = _numbering_bucket(stale_record.category, stale_record.subtype, stale_record.review)
         stale_index = naming.parse_index(stale_record.output_path)
         if stale_index is not None:
             used_indices.get(stale_bucket, set()).discard(stale_index)
@@ -402,14 +413,12 @@ def name(
         safe_category = naming.sanitize(result.category)
         safe_subtype = naming.sanitize(result.subtype)
         review = naming.is_review(result.confidence, threshold)
-        bucket = (safe_category, safe_subtype, review)
+        bucket = _numbering_bucket(safe_category, safe_subtype, review)
 
         previous_record = previous_by_source.get(source)
         unchanged = previous_record is not None and (
-            previous_record.category,
-            previous_record.subtype,
-            previous_record.review,
-        ) == bucket
+            _numbering_bucket(previous_record.category, previous_record.subtype, previous_record.review) == bucket
+        )
 
         if unchanged:
             output_path_str = previous_record.output_path
