@@ -105,7 +105,14 @@ class ClapClassifier:
         pairs = [(category, subtype) for category, subtypes in taxonomy.items() for subtype in subtypes]
         if not pairs:
             raise ValueError("taxonomy must not be empty")
-        prompts = [f"the sound of a {subtype}" for _category, subtype in pairs]
+        # Category context matters, not just the subtype word: several
+        # subtypes are reused across categories (e.g. "stab" under both synth
+        # and strings) and would otherwise produce byte-identical prompts
+        # with no way for the model to tell them apart. Verified against a
+        # real misclassification during the acceptance run (#9): this
+        # phrasing alone raised the correct label's confidence from 0.366 to
+        # 0.559 for a sample the bare-subtype prompt had gotten wrong.
+        prompts = [f"the sound of {subtype}, a type of {category}" for category, subtype in pairs]
 
         target_sr = self._processor.feature_extractor.sampling_rate
         mono = audio.samples.mean(axis=1).astype(np.float32)

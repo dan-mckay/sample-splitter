@@ -37,10 +37,21 @@ def test_relative_path_builds_category_subtype_filename():
     assert path == Path("drums/kick/kick_01.flac")
 
 
-def test_relative_path_routes_review_results_under_review_root():
+def test_relative_path_routes_review_results_to_a_flat_unlabeled_pool():
+    # Deliberately ignores category/subtype: a review result is by
+    # definition a guess the model wasn't confident in, so the output
+    # shouldn't bake that guess into a folder a human then has to notice is
+    # wrong and rename out of.
     path = naming.relative_path("drums", "kick", 1, review=True)
 
-    assert path == Path("_review/drums/kick/kick_01.flac")
+    assert path == Path("_review/misc_01.flac")
+
+
+def test_relative_path_review_ignores_category_and_subtype():
+    path_a = naming.relative_path("drums", "kick", 1, review=True)
+    path_b = naming.relative_path("vocal", "phrase", 1, review=True)
+
+    assert path_a == path_b
 
 
 def test_relative_path_sanitizes_category_and_subtype():

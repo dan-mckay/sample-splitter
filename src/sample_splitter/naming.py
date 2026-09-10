@@ -30,13 +30,20 @@ def next_index(used: set[int]) -> int:
 
 def relative_path(category: str, subtype: str, index: int, review: bool) -> Path:
     """The output path for one filed sample, relative to the `name` output
-    root: `category/subtype/subtype_NN.flac`, or the same shape nested under
-    `_review/` for low-confidence results."""
+    root: `category/subtype/subtype_NN.flac` for a confident result.
+
+    Review results route to a flat `_review/misc_NN.flac` instead of
+    mirroring the classifier's (by definition, below-threshold) guess —
+    nesting review output under the model's own unreliable category/subtype
+    guess means a wrong guess has to be manually corrected twice: once by
+    judging the sample, once by renaming it out of a misleading folder. A
+    flat, unlabeled pool only asks for the first."""
+    if review:
+        return Path("_review", f"misc_{index:02d}.flac")
     safe_category = sanitize(category)
     safe_subtype = sanitize(subtype)
     filename = f"{safe_subtype}_{index:02d}.flac"
-    parts = (safe_category, safe_subtype, filename)
-    return Path("_review", *parts) if review else Path(*parts)
+    return Path(safe_category, safe_subtype, filename)
 
 
 def is_review(confidence: float, threshold: float) -> bool:
