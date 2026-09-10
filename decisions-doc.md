@@ -116,7 +116,7 @@ The full pipeline (`scan` → `split` → `name --backend clap`) was run against
 | **`scan` → `split`** | All 92 tracks processed cleanly: 0 errors, 0 silent drops. 80 splittable tracks → 934 real one-shots; 12 correctly skipped as montage (clustered at the disc's end, plus a few full-length tracks elsewhere — matches the Class A/B split predicted during planning) |
 | **Split accuracy** | Median 10 samples/track, matching the corpus-wide expectation. Every track flagged as a scan-mismatch outlier was individually investigated; all but one were confirmed *correct* detection of genuinely unusual content (content variety, a live-recorded instrument's higher noise floor, sounds played twice per gap) |
 | **Real bug found and fixed** | One track ("Electribe 101") has ~3.9s of bit-exact digital silence at its tail, quieter than its real between-hit gaps — the 10th-percentile noise-floor estimator locked onto that trailing silence instead, collapsing 20 real drum-machine hits into 1 detected segment. Fixed with a per-file `threshold_db` override (the mechanism built in slice 5) rather than a code change; verified against the file directly |
-| **Ear/hardware check** | Split sample boundaries confirmed clean (no clipped transients or truncated tails) by listening. Output loads correctly onto the Akai MPC Sample. Ableton verification still outstanding |
+| **Ear/hardware check** | Split sample boundaries confirmed clean (no clipped transients or truncated tails) by listening. Output loads correctly onto the Akai MPC Sample — the primary target device. Ableton verification (also named in the original success criteria) was deliberately skipped; the owner judged MPC Sample confirmation sufficient to close #9 |
 
 **Classification tuning** — `name --backend clap`, tracked by filed/review split and median confidence across all 934 samples:
 
@@ -142,7 +142,6 @@ Filed count and median confidence don't move monotonically upward — each added
 ## Open questions
 
 - **Taxonomy contents** — substantially exercised against the real corpus during the #9 acceptance run (see findings above), but still expected to keep evolving as more CDs are processed — editing the config and re-running `name` remains the intended workflow.
-- **Ableton verification** — MPC Sample loading is confirmed; Ableton (also named in the success criteria) has not yet been checked.
 
 ---
 
