@@ -1,14 +1,42 @@
 import json
+import tempfile
+import tomllib
+from importlib import resources
+from pathlib import Path
 
 import numpy as np
 import pytest
 from typer.testing import CliRunner
 
 from sample_splitter import audio_io, manifest
+from sample_splitter.classifier import StubClassifier
 from sample_splitter.cli import app
 from tests.fixtures import make_track, make_tone_sequence
 
 runner = CliRunner()
+
+
+def _stub_result(tone_hz):
+    """What StubClassifier deterministically assigns a synthetic one-shot
+    tone at this frequency, against the real packaged default taxonomy.
+    Computed at test time (not hardcoded) so a taxonomy edit only means
+    re-picking a frequency that still satisfies a test's confidence-band
+    comment, not hand-updating scattered category/subtype path strings."""
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "probe.flac"
+        make_tone_sequence(path, tone_count=1, tone_ms=200, gap_ms=500, tone_hz=tone_hz)
+        audio = audio_io.load(path)
+    with (resources.files("sample_splitter.config") / "default.toml").open("rb") as f:
+        taxonomy = tomllib.load(f)["taxonomy"]
+    return StubClassifier().classify(audio, taxonomy)
+
+
+def _filed_path(result, index=1):
+    return Path(result.category) / result.subtype / f"{result.subtype}_{index:02d}.flac"
+
+
+def _review_path(result, index=1):
+    return Path("_review") / result.category / result.subtype / f"{result.subtype}_{index:02d}.flac"
 
 _DEFAULT_SPLITTER_CONFIG = {
     "threshold_db": 20.0,
@@ -605,13 +633,18 @@ def test_scan_reports_clean_error_when_given_a_file(tmp_path):
     assert "is not a directory" in result.stderr
 
 
-# Tone frequencies below are pinned to specific StubClassifier outcomes
-# against the real default.toml taxonomy (found by brute-force search over
-# the stub's hash-derived confidence) — not arbitrary values.
-_CLEAN_HZ = 220.0  # -> drums/perc, confidence 0.678 (>= 0.5 default threshold)
-_CLEAN_HZ_ALT = 670.0  # -> drums/perc, confidence 0.808 (same bucket as _CLEAN_HZ)
-_REVIEW_HZ = 240.0  # -> fx/noise, confidence 0.05 (< 0.5 default threshold)
-_JUST_ABOVE_HZ = 340.0  # -> guitar/riff, confidence 0.588 (0.5 <= x < 0.6)
+# Tone frequencies below are pinned to specific StubClassifier confidence
+# bands against the real default.toml taxonomy (found by brute-force search)
+# — not arbitrary values. A taxonomy edit can shift which bucket/confidence
+# a frequency lands on; if one of these assertions starts failing, re-run
+# the brute-force search (see git history for the one-liner) rather than
+# hand-picking a new value. The resulting category/subtype path is resolved
+# dynamically via _stub_result/_filed_path/_review_path, so taxonomy edits
+# never require touching hardcoded path strings.
+_CLEAN_HZ = 110.0  # confidence 0.663 (>= 0.5 default threshold)
+_CLEAN_HZ_ALT = 330.0  # confidence 0.549, same bucket as _CLEAN_HZ
+_REVIEW_HZ = 160.0  # confidence 0.074 (< 0.5 default threshold)
+_JUST_ABOVE_HZ = 460.0  # confidence 0.543 (0.5 <= x < 0.6)
 
 
 def test_name_files_a_high_confidence_sample_into_category_subtype_dir(tmp_path):
@@ -622,7 +655,7 @@ def test_name_files_a_high_confidence_sample_into_category_subtype_dir(tmp_path)
     result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
 
     assert result.exit_code == 0
-    assert (output_dir / "drums" / "perc" / "perc_01.flac").exists()
+    assert (output_dir / _filed_path(_stub_result(_CLEAN_HZ))).exists()
 
 
 def test_name_routes_a_low_confidence_sample_to_review(tmp_path):
@@ -632,9 +665,10 @@ def test_name_routes_a_low_confidence_sample_to_review(tmp_path):
 
     result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
 
+    review_result = _stub_result(_REVIEW_HZ)
     assert result.exit_code == 0
-    assert (output_dir / "_review" / "fx" / "noise" / "noise_01.flac").exists()
-    assert not (output_dir / "fx").exists()
+    assert (output_dir / _review_path(review_result)).exists()
+    assert not (output_dir / review_result.category).exists()
 
 
 def test_name_records_category_subtype_and_confidence_in_the_manifest(tmp_path):
@@ -644,15 +678,16 @@ def test_name_records_category_subtype_and_confidence_in_the_manifest(tmp_path):
 
     runner.invoke(app, ["name", str(input_dir), str(output_dir)])
 
+    clean_result = _stub_result(_CLEAN_HZ)
     manifest_data = json.loads((output_dir / "naming.json").read_text())
     assert manifest_data["names"] == [
         {
             "source": "clean.flac",
-            "category": "drums",
-            "subtype": "perc",
-            "confidence": 0.678,
+            "category": clean_result.category,
+            "subtype": clean_result.subtype,
+            "confidence": clean_result.confidence,
             "review": False,
-            "output_path": "drums/perc/perc_01.flac",
+            "output_path": str(_filed_path(clean_result)),
         }
     ]
 
@@ -665,7 +700,7 @@ def test_name_works_standalone_on_a_plain_folder_with_no_manifest(tmp_path):
     result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
 
     assert result.exit_code == 0
-    assert (output_dir / "drums" / "perc" / "perc_01.flac").exists()
+    assert (output_dir / _filed_path(_stub_result(_CLEAN_HZ))).exists()
 
 
 def test_name_reads_samples_from_a_split_manifest_when_present(tmp_path):
@@ -687,7 +722,7 @@ def test_name_reads_samples_from_a_split_manifest_when_present(tmp_path):
     result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
 
     assert result.exit_code == 0
-    assert (output_dir / "drums" / "perc" / "perc_01.flac").exists()
+    assert (output_dir / _filed_path(_stub_result(_CLEAN_HZ))).exists()
     manifest_data = json.loads((output_dir / "naming.json").read_text())
     assert manifest_data["names"][0]["source"] == "track.wav_01.flac"
 
@@ -722,8 +757,13 @@ def test_name_assigns_collision_free_numbering_within_the_same_bucket(tmp_path):
 
     result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
 
+    clean_result = _stub_result(_CLEAN_HZ)
+    bucket_dir = output_dir / clean_result.category / clean_result.subtype
     assert result.exit_code == 0
-    assert sorted(p.name for p in (output_dir / "drums" / "perc").glob("*.flac")) == ["perc_01.flac", "perc_02.flac"]
+    assert sorted(p.name for p in bucket_dir.glob("*.flac")) == [
+        f"{clean_result.subtype}_01.flac",
+        f"{clean_result.subtype}_02.flac",
+    ]
 
 
 def test_name_is_idempotent_on_rerun(tmp_path):
@@ -731,13 +771,14 @@ def test_name_is_idempotent_on_rerun(tmp_path):
     input_dir.mkdir()
     make_tone_sequence(input_dir / "clean.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
 
+    filed_path = output_dir / _filed_path(_stub_result(_CLEAN_HZ))
     runner.invoke(app, ["name", str(input_dir), str(output_dir)])
-    before = (output_dir / "drums" / "perc" / "perc_01.flac").read_bytes()
+    before = filed_path.read_bytes()
     runner.invoke(app, ["name", str(input_dir), str(output_dir)])
-    after = (output_dir / "drums" / "perc" / "perc_01.flac").read_bytes()
+    after = filed_path.read_bytes()
 
     assert before == after
-    assert list((output_dir / "drums" / "perc").glob("*.flac")) == [output_dir / "drums" / "perc" / "perc_01.flac"]
+    assert list(filed_path.parent.glob("*.flac")) == [filed_path]
 
 
 def test_name_never_modifies_the_input_sample(tmp_path):
@@ -756,32 +797,35 @@ def test_name_rerunning_with_a_lower_threshold_moves_a_review_sample_into_the_cl
     input_dir, output_dir = tmp_path / "in", tmp_path / "out"
     input_dir.mkdir()
     make_tone_sequence(input_dir / "borderline.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_JUST_ABOVE_HZ)
+    borderline_result = _stub_result(_JUST_ABOVE_HZ)
 
     runner.invoke(app, ["name", str(input_dir), str(output_dir), "--review-threshold", "0.6"])
-    assert (output_dir / "_review" / "guitar" / "riff" / "riff_01.flac").exists()
+    assert (output_dir / _review_path(borderline_result)).exists()
 
     runner.invoke(app, ["name", str(input_dir), str(output_dir), "--review-threshold", "0.5"])
 
-    assert (output_dir / "guitar" / "riff" / "riff_01.flac").exists()
-    assert not (output_dir / "_review" / "guitar").exists()
+    filed_path = _filed_path(borderline_result)
+    assert (output_dir / filed_path).exists()
+    assert not (output_dir / "_review" / borderline_result.category).exists()
     manifest_data = json.loads((output_dir / "naming.json").read_text())
     assert manifest_data["names"][0]["review"] is False
-    assert manifest_data["names"][0]["output_path"] == "guitar/riff/riff_01.flac"
+    assert manifest_data["names"][0]["output_path"] == str(filed_path)
 
 
 def test_name_removes_output_file_when_its_source_disappears(tmp_path):
     input_dir, output_dir = tmp_path / "in", tmp_path / "out"
     input_dir.mkdir()
     make_tone_sequence(input_dir / "unsure.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_REVIEW_HZ)
+    review_result = _stub_result(_REVIEW_HZ)
     runner.invoke(app, ["name", str(input_dir), str(output_dir)])
-    assert (output_dir / "_review" / "fx" / "noise" / "noise_01.flac").exists()
+    assert (output_dir / _review_path(review_result)).exists()
 
     (input_dir / "unsure.flac").unlink()
     result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
 
     assert result.exit_code == 0
     assert "1 removed" in result.stdout
-    assert not (output_dir / "_review" / "fx").exists()
+    assert not (output_dir / "_review" / review_result.category).exists()
     manifest_data = json.loads((output_dir / "naming.json").read_text())
     assert manifest_data["names"] == []
 
@@ -790,18 +834,20 @@ def test_name_reclaims_a_vanished_sources_slot_without_orphaning_or_overwriting(
     input_dir, output_dir = tmp_path / "in", tmp_path / "out"
     input_dir.mkdir()
     make_tone_sequence(input_dir / "a.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ)
+    clean_result = _stub_result(_CLEAN_HZ)
     runner.invoke(app, ["name", str(input_dir), str(output_dir)])
-    assert (output_dir / "drums" / "perc" / "perc_01.flac").exists()
+    assert (output_dir / _filed_path(clean_result)).exists()
 
     (input_dir / "a.flac").unlink()
     make_tone_sequence(input_dir / "b.flac", tone_count=1, tone_ms=200, gap_ms=500, tone_hz=_CLEAN_HZ_ALT)
     result = runner.invoke(app, ["name", str(input_dir), str(output_dir)])
 
+    bucket_dir = output_dir / clean_result.category / clean_result.subtype
     assert result.exit_code == 0
     manifest_data = json.loads((output_dir / "naming.json").read_text())
     assert {r["source"] for r in manifest_data["names"]} == {"b.flac"}
-    assert sorted(p.name for p in (output_dir / "drums" / "perc").glob("*.flac")) == ["perc_01.flac"]
-    filed = audio_io.load(output_dir / "drums" / "perc" / "perc_01.flac")
+    assert sorted(p.name for p in bucket_dir.glob("*.flac")) == [f"{clean_result.subtype}_01.flac"]
+    filed = audio_io.load(bucket_dir / f"{clean_result.subtype}_01.flac")
     original_b = audio_io.load(input_dir / "b.flac")
     assert np.allclose(filed.samples, original_b.samples, atol=1e-4)
 

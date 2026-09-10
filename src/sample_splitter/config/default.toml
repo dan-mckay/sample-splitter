@@ -31,13 +31,40 @@ threshold_db = 200.0
 review_threshold = 0.5
 backend = "stub"
 
+# Subtype text doubles as the CLAP classification prompt (see classifier.py)
+# and the output folder/filename — spell out abbreviations that read poorly
+# as a bare word ("ep", "hat", "perc", "sub", "break") rather than keeping a
+# separate short-name/prompt-text mapping in sync. Verified against a real
+# misclassification during the acceptance run (#9): "ep" alone scored 0.631
+# on a sample that was actually a drum break; "electric piano" scored the
+# same sample's correct label ("drum break") at 0.710.
+#
+# "clap" and the "brass" category were added after cross-referencing the
+# General MIDI percussion key map and the NSynth/AudioSet instrument-family
+# taxonomies against gaps in the original list, then validating each against
+# real samples from the library: adding "clap" pulled 4 of 11 previously
+# "snare"-classified Electribe 101 hits over to the correct label (3 of them
+# at 0.94+ confidence); adding "brass" correctly reclassified 3 known brass
+# samples (Funky Element track 54, samples 05-07) that had previously been
+# forced into wrong labels (vocal/shout, synth/stab, synth/lead) at
+# mediocre confidence.
+#
+# Full-library review from the owner (#9) surfaced three more findings:
+# - "bell" was a missing category: electric_piano/organ/piano were all
+#   catching bell/chime content instead. Validated against 6 real review
+#   samples from keys/electric_piano — 5 of 6 correctly moved to bell/*.
+# - loop/drum_break/fill were collapsed to a single "loop" subtype — the
+#   owner found the three indistinguishable by ear in this library.
+# - vocal/spoken was merged into vocal/phrase for the same reason.
 [taxonomy]
-drums = ["kick", "snare", "hat", "tom", "cymbal", "perc"]
-bass = ["sub", "synth", "picked"]
+drums = ["kick", "snare", "hi-hat", "tom", "cymbal", "percussion", "clap"]
+bass = ["sub bass", "synth", "picked"]
 synth = ["stab", "pad", "lead"]
-keys = ["piano", "organ", "ep"]
+keys = ["piano", "organ", "electric piano"]
 guitar = ["chord", "riff", "note"]
 strings = ["stab", "sustain"]
-vocal = ["phrase", "shout", "spoken"]
+vocal = ["phrase", "shout"]
 fx = ["riser", "impact", "noise", "ambience"]
-beats = ["loop", "break", "fill"]
+beats = ["loop"]
+brass = ["stab", "hit"]
+bell = ["bell", "chime"]
